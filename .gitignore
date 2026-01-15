@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+env/
+venv/
+.venv/
+*.egg
+
+# Data files (too large for git)
+data/raw/
+data/processed/
+*.json.gz
+*.parquet
+*.orc
+
+# Hadoop / Hive / Spark temp
+derby.log
+metastore_db/
+spark-warehouse/
+
+# Node / React
+frontend/node_modules/
+frontend/.next/
+frontend/dist/
+frontend/build/
+frontend/.env.local
+
+# Docker
+docker/volumes/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Model artifacts
+backend/models/artifacts/*.pkl
+backend/models/artifacts/*.bin
