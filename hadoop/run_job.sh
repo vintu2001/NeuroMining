@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# NeuroMining — Submit the MapReduce streaming job to Hadoop
-# Run from inside the namenode container or with HADOOP_HOME configured.
+# Submit the MapReduce streaming job to Hadoop.
 set -euo pipefail
 
 HADOOP_STREAMING_JAR="$(find "$HADOOP_HOME" -name 'hadoop-streaming-*.jar' | head -1)"

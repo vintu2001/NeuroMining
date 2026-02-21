@@ -1,20 +1,11 @@
--- =============================================================================
--- NeuroMining — Hive Feature Engineering
--- Reads MapReduce output from HDFS and produces a consolidated feature table
--- for Spark MLlib ingestion.
--- Run via:  hive -f hive/feature_eng.sql
--- =============================================================================
-
--- Use a dedicated database
+-- Hive feature engineering pipeline.
+-- Run via: hive -f hive/feature_eng.sql
 CREATE DATABASE IF NOT EXISTS neuromining
   LOCATION 'hdfs:///neuromining/hive/warehouse';
 
 USE neuromining;
 
--- =============================================================================
--- Stage 1: External table — raw MapReduce output
---   Schema mirrors reducer output: user_id, action, count
--- =============================================================================
+-- Stage 1: External table over raw MapReduce output
 DROP TABLE IF EXISTS raw_action_counts;
 CREATE EXTERNAL TABLE raw_action_counts (
     user_id     STRING,
@@ -27,9 +18,7 @@ STORED AS TEXTFILE
 LOCATION 'hdfs:///neuromining/cleaned/session_counts/'
 TBLPROPERTIES ('skip.header.line.count' = '0');
 
--- =============================================================================
 -- Stage 2: Pivot action counts into feature columns
--- =============================================================================
 DROP TABLE IF EXISTS user_action_pivot;
 CREATE TABLE user_action_pivot
 STORED AS ORC
@@ -50,10 +39,7 @@ SELECT
 FROM raw_action_counts
 GROUP BY user_id;
 
--- =============================================================================
--- Stage 3: External table — raw JSON logs for text-based features
---   Using Hive's JsonSerDe to read the gzipped JSONL directly
--- =============================================================================
+-- Stage 3: External table over raw JSON logs
 DROP TABLE IF EXISTS raw_logs;
 CREATE EXTERNAL TABLE raw_logs (
     `timestamp`       STRING,
@@ -80,9 +66,7 @@ STORED AS TEXTFILE
 LOCATION 'hdfs:///neuromining/raw/clickstream/'
 TBLPROPERTIES ("hive.input.format" = "org.apache.hadoop.mapred.TextInputFormat");
 
--- =============================================================================
--- Stage 4: Session-level aggregates using window functions
--- =============================================================================
+-- Stage 4: Session-level aggregates
 DROP TABLE IF EXISTS session_features;
 CREATE TABLE session_features
 STORED AS ORC
@@ -95,20 +79,17 @@ SELECT
     MAX(`timestamp`)                                          AS session_end,
     COUNT(*)                                                  AS session_events,
 
-    -- Time since last action (seconds) using window LAG
     AVG(
         UNIX_TIMESTAMP(`timestamp`, "yyyy-MM-dd'T'HH:mm:ss") -
         LAG(UNIX_TIMESTAMP(`timestamp`, "yyyy-MM-dd'T'HH:mm:ss"), 1, NULL)
             OVER (PARTITION BY user_id, session_id ORDER BY `timestamp`)
     )                                                         AS avg_inter_event_sec,
 
-    -- Session duration in minutes
     (
         UNIX_TIMESTAMP(MAX(`timestamp`), "yyyy-MM-dd'T'HH:mm:ss") -
         UNIX_TIMESTAMP(MIN(`timestamp`), "yyyy-MM-dd'T'HH:mm:ss")
     ) / 60.0                                                  AS session_duration_min,
 
-    -- Professional keyword signal: count events with professional payloads
     SUM(
         CASE
             WHEN action = 'search' AND REGEXP_COUNT(
@@ -121,13 +102,11 @@ SELECT
         END
     )                                                         AS n_professional_searches,
 
-    -- Engagement depth: high-dwell clicks
     SUM(
         CASE WHEN action = 'click' AND payload.dwell_time_ms > 30000 THEN 1
              ELSE 0 END
     )                                                         AS n_deep_clicks,
 
-    -- Country (take mode via subquery later; use any() here for simplicity)
     FIRST_VALUE(client.country)
         OVER (PARTITION BY user_id, session_id ORDER BY `timestamp`)  AS country
 
@@ -135,9 +114,7 @@ FROM raw_logs
 WHERE user_id IS NOT NULL AND session_id IS NOT NULL
 GROUP BY user_id, session_id;
 
--- =============================================================================
--- Stage 5: Consolidated Feature Table  (joins pivot + session aggregates)
--- =============================================================================
+-- Stage 5: Consolidated feature table
 DROP TABLE IF EXISTS feature_table;
 CREATE TABLE feature_table
 PARTITIONED BY (dt STRING)
@@ -147,7 +124,6 @@ AS
 SELECT
     p.user_id,
 
-    -- Action counts
     p.n_search,
     p.n_click,
     p.n_view_profile,
@@ -158,7 +134,6 @@ SELECT
     p.n_follow,
     p.total_actions,
 
-    -- Session-level aggregates
     COUNT(DISTINCT s.session_id)                              AS total_sessions,
     AVG(s.session_duration_min)                               AS avg_session_duration_min,
     AVG(s.session_events)                                     AS avg_events_per_session,
@@ -166,7 +141,6 @@ SELECT
     SUM(s.n_professional_searches)                            AS total_professional_searches,
     SUM(s.n_deep_clicks)                                      AS total_deep_clicks,
 
-    -- Derived ratio features
     CASE WHEN p.total_actions > 0
          THEN SUM(s.n_professional_searches) * 1.0 / p.total_actions
          ELSE 0.0 END                                         AS professional_ratio,
@@ -175,7 +149,6 @@ SELECT
          THEN p.n_click * 1.0 / p.n_search
          ELSE 0.0 END                                         AS click_through_rate,
 
-    -- Label: 1 = high-value, 0 = low-value
     CASE
         WHEN SUM(s.n_professional_searches) >= 3
              AND p.n_send_message >= 1
@@ -192,9 +165,7 @@ GROUP BY
     p.n_send_message, p.n_comment, p.n_save_post,
     p.n_share, p.n_follow, p.total_actions;
 
--- =============================================================================
--- Stage 6: Export Feature Table to HDFS (Parquet) for Spark
--- =============================================================================
+-- Stage 6: Export feature table to HDFS as Parquet
 SET hive.exec.compress.output=true;
 SET parquet.compression=SNAPPY;
 

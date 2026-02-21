@@ -1,16 +1,6 @@
-"""
-NeuroMining — Bisecting K-Means User Segmentation
-Reads the feature_table from Hive, runs Bisecting K-Means (k=5) to identify
-distinct behavioral archetypes, applies PCA for 2-D visualization coordinates,
-and persists cluster assignments and model to HDFS.
-
-Submit via:
-    spark-submit \
-        --master spark://spark-master:7077 \
-        --conf spark.sql.catalogImplementation=hive \
-        --conf spark.hadoop.hive.metastore.uris=thrift://hive-metastore:9083 \
-        spark/clustering.py
-"""
+"""Bisecting K-Means user segmentation. Reads the Hive feature table, clusters
+users into behavioral archetypes, applies PCA for visualization, and persists
+assignments and metadata to HDFS."""
 
 import json
 
@@ -22,8 +12,6 @@ from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, udf
 from pyspark.sql.types import ArrayType, DoubleType
 
-# ── Constants ─────────────────────────────────────────────────────────────────
-
 HIVE_TABLE           = "neuromining.feature_table"
 HDFS_CLUSTER_MODEL   = "hdfs:///neuromining/models/bisecting_kmeans"
 HDFS_ASSIGNMENTS     = "hdfs:///neuromining/outputs/cluster_assignments/"
@@ -33,7 +21,7 @@ N_CLUSTERS   = 5
 PCA_DIM      = 2
 SEED         = 42
 MAX_ITER     = 30
-MIN_DIVISIBLE = 20   # Minimum cluster size before stopping bisection
+MIN_DIVISIBLE = 20
 
 FEATURE_COLS = [
     "n_search", "n_click", "n_view_profile", "n_send_message",
@@ -44,7 +32,6 @@ FEATURE_COLS = [
     "total_deep_clicks", "professional_ratio", "click_through_rate",
 ]
 
-# Human-readable archetype names assigned post-hoc based on centroid analysis
 ARCHETYPE_NAMES = {
     0: "Power Networkers",
     1: "Passive Browsers",
@@ -53,8 +40,6 @@ ARCHETYPE_NAMES = {
     4: "Casual Observers",
 }
 
-
-# ── Spark session ─────────────────────────────────────────────────────────────
 
 def build_spark() -> SparkSession:
     return (
@@ -67,8 +52,6 @@ def build_spark() -> SparkSession:
         .getOrCreate()
     )
 
-
-# ── Pipeline ──────────────────────────────────────────────────────────────────
 
 def build_clustering_pipeline() -> Pipeline:
     assembler = VectorAssembler(
@@ -94,7 +77,6 @@ def build_clustering_pipeline() -> Pipeline:
 
 
 def build_pca_pipeline() -> Pipeline:
-    """Separate PCA pipeline applied after clustering for viz coordinates."""
     assembler = VectorAssembler(
         inputCols=FEATURE_COLS,
         outputCol="raw_features",
@@ -114,15 +96,10 @@ def build_pca_pipeline() -> Pipeline:
     return Pipeline(stages=[assembler, scaler, pca])
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
 vector_to_array = udf(lambda v: v.toArray().tolist(), ArrayType(DoubleType()))
 
 
-def compute_cluster_metadata(model, df) -> list[dict]:
-    """
-    Extract centroid info and compute within-cluster stats.
-    """
+def compute_cluster_metadata(model, df) -> list:
     bkm_stage = model.stages[-1]
     centers   = bkm_stage.clusterCenters()
 
@@ -155,7 +132,6 @@ def compute_cluster_metadata(model, df) -> list[dict]:
     return metadata
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
     spark = build_spark()
@@ -174,12 +150,10 @@ def main():
     pca_model    = pca_pipeline.fit(df)
     pca_result   = pca_model.transform(df)
 
-    # Attach PCA coordinates to clustered DataFrame
     pca_coords = pca_result.select("user_id", "pca_coords")
     output = clustered.join(pca_coords, on="user_id", how="left")
     output = output.withColumn("pca_array", vector_to_array(col("pca_coords")))
 
-    # Select and rename for clean output schema
     final = output.select(
         col("user_id"),
         col("cluster"),
@@ -191,14 +165,13 @@ def main():
         col("total_sessions"),
     )
 
-    # ── Persist model and assignments ─────────────────────────────────────────
+
     model.write().overwrite().save(HDFS_CLUSTER_MODEL)
     print(f"[clustering] Model saved → {HDFS_CLUSTER_MODEL}")
 
     final.write.mode("overwrite").parquet(HDFS_ASSIGNMENTS)
     print(f"[clustering] Assignments saved → {HDFS_ASSIGNMENTS}")
 
-    # ── Save metadata JSON ─────────────────────────────────────────────────────
     cluster_meta = compute_cluster_metadata(model, clustered)
     meta_json = json.dumps({"clusters": cluster_meta}, indent=2)
     spark.sparkContext.parallelize([meta_json]).saveAsTextFile(HDFS_CLUSTER_META)

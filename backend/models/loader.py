@@ -1,16 +1,11 @@
-"""
-NeuroMining — Model & Data Loader
-Reads metrics JSON and cluster assignments from disk/HDFS and
-provides them to the FastAPI routes.
-"""
+"""Model and data artifact loader for the FastAPI backend."""
 
 import json
 import os
 import random
 from pathlib import Path
-from typing import Optional
+from typing import Dict, List, Optional
 
-# Resolve paths relative to this file so the backend works from any cwd
 _BASE = Path(__file__).resolve().parent.parent
 METRICS_PATH  = Path(os.environ.get("NM_METRICS_PATH",  _BASE / "artifacts" / "classification_metrics.json"))
 CLUSTERS_PATH = Path(os.environ.get("NM_CLUSTERS_PATH", _BASE / "artifacts" / "cluster_metadata.json"))
@@ -28,29 +23,21 @@ LABEL_NAMES = {0: "low-value", 1: "high-value"}
 
 
 class ModelLoader:
-    """
-    Lazy-loads artifact files on first access.
-    In a production deployment these would be streamed from HDFS
-    via pyarrow.fs.HadoopFileSystem or cached in Redis.
-    """
 
     def __init__(self):
-        self._metrics: list[dict] | None = None
-        self._cluster_meta: list[dict] | None = None
-        self._assignments: list[dict] | None = None
+        self._metrics: Optional[List[Dict]] = None
+        self._cluster_meta: Optional[List[Dict]] = None
+        self._assignments: Optional[List[Dict]] = None
 
-    # ── Internal loaders ─────────────────────────────────────────────────────
-
-    def _load_metrics(self) -> list[dict]:
+    def _load_metrics(self) -> List[Dict]:
         if self._metrics is None:
             if not METRICS_PATH.exists():
-                # Return stub data for development
                 self._metrics = _stub_metrics()
             else:
                 self._metrics = json.loads(METRICS_PATH.read_text())
         return self._metrics
 
-    def _load_cluster_meta(self) -> list[dict]:
+    def _load_cluster_meta(self) -> List[Dict]:
         if self._cluster_meta is None:
             if not CLUSTERS_PATH.exists():
                 self._cluster_meta = _stub_cluster_meta()
@@ -59,7 +46,7 @@ class ModelLoader:
                 self._cluster_meta = data.get("clusters", data)
         return self._cluster_meta
 
-    def _load_assignments(self) -> list[dict]:
+    def _load_assignments(self) -> List[Dict]:
         if self._assignments is None:
             if not ASSIGNMENTS_PATH.exists():
                 self._assignments = _stub_assignments()
@@ -67,12 +54,10 @@ class ModelLoader:
                 self._assignments = json.loads(ASSIGNMENTS_PATH.read_text())
         return self._assignments
 
-    # ── Public API ────────────────────────────────────────────────────────────
-
-    def get_metrics(self) -> list[dict]:
+    def get_metrics(self) -> List[Dict]:
         return self._load_metrics()
 
-    def get_clusters(self, limit: int = 2000) -> dict:
+    def get_clusters(self, limit: int = 2000) -> Dict:
         meta   = self._load_cluster_meta()
         points = self._load_assignments()[:limit]
         enriched_points = [
@@ -108,8 +93,6 @@ class ModelLoader:
             "mapreduce_output_rows": len(assignments) * 14,
         }
 
-
-# ── Stub data (used when artifact files are not yet available) ────────────────
 
 def _stub_metrics() -> list[dict]:
     return [

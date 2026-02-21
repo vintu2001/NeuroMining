@@ -1,14 +1,5 @@
 #!/usr/bin/env python3
-"""
-NeuroMining — Synthetic Clickstream Log Generator
-Produces JSON-line log files simulating user clickstreams, search queries,
-and session metadata at scale (configurable up to 100 GB+).
-
-Usage:
-    python logger.py --size 100          # target ~100 GB output
-    python logger.py --records 5000000   # explicit record count
-    python logger.py --out /data/raw     # custom output directory
-"""
+"""Synthetic clickstream log generator producing JSON-line files at scale."""
 
 import argparse
 import gzip
@@ -21,7 +12,6 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-# ── Domain constants ────────────────────────────────────────────────────────
 
 ACTIONS = [
     "search", "click", "view_profile", "send_message",

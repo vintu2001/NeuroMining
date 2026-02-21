@@ -31,7 +31,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-nm-bg text-nm-text">
-      {/* ── Header ──────────────────────────────────────────────────────── */}
       <header className="border-b border-nm-border px-8 py-4 flex items-center gap-4">
         <span className="text-nm-accent font-bold text-xl tracking-tight">
           ⬡ NeuroMining
@@ -41,7 +40,6 @@ export default function App() {
         </span>
       </header>
 
-      {/* ── Tab bar ─────────────────────────────────────────────────────── */}
       <nav className="border-b border-nm-border px-8 flex gap-1">
         {TABS.map((tab) => (
           <button
@@ -58,7 +56,6 @@ export default function App() {
         ))}
       </nav>
 
-      {/* ── Main content ────────────────────────────────────────────────── */}
       <main className="px-8 py-6">
         {error && (
           <div className="mb-4 rounded-lg bg-red-900/30 border border-red-700 px-4 py-3 text-red-300 text-sm">

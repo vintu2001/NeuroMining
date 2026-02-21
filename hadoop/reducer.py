@@ -1,18 +1,6 @@
 #!/usr/bin/env python3
-"""
-NeuroMining — MapReduce Reducer (Python Streaming)
-
-Receives sorted key-value pairs from the mapper:
-    <user_id>\t<action>\t1
-
-Aggregates total action counts per (user_id, action) pair and emits:
-    <user_id>\t<action>\t<total_count>
-
-Additionally computes per-user aggregate row (action="__total__") for
-downstream Hive ingestion.
-
-Hadoop sort guarantees all lines for a given user_id arrive consecutively.
-"""
+"""MapReduce reducer (Python streaming). Aggregates action counts per user
+and emits user_id/action/count tuples plus a __total__ row per user."""
 
 import sys
 from collections import defaultdict
@@ -27,7 +15,7 @@ def process_stream(stream=sys.stdin):
         for action, count in sorted(counts.items()):
             print(f"{user_id}\t{action}\t{count}")
             total += count
-        # Emit aggregate row so Hive can query total_actions directly
+        # Emit aggregate row for Hive
         print(f"{user_id}\t__total__\t{total}")
 
     for line in stream:
@@ -57,7 +45,6 @@ def process_stream(stream=sys.stdin):
 
         action_counts[action] += count
 
-    # Flush last user
     if current_user is not None:
         flush(current_user, action_counts)
 

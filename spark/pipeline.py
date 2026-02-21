@@ -1,16 +1,5 @@
-"""
-NeuroMining — Spark MLlib Ensemble Classification Pipeline
-Reads the feature_table from Hive (Parquet on HDFS), trains three classifiers
-(Naïve Bayes, Linear SVM, Multilayer Perceptron), and persists model weights +
-evaluation metrics to HDFS.
-
-Submit via:
-    spark-submit \
-        --master spark://spark-master:7077 \
-        --conf spark.sql.catalogImplementation=hive \
-        --conf spark.hadoop.hive.metastore.uris=thrift://hive-metastore:9083 \
-        spark/pipeline.py
-"""
+"""Spark MLlib ensemble classification pipeline. Trains Naive Bayes, Linear SVM,
+and MLP classifiers on the Hive feature table, then evaluates an ensemble vote."""
 
 import json
 import sys
@@ -33,8 +22,6 @@ from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, when
 
-# ── Constants ─────────────────────────────────────────────────────────────────
-
 HIVE_TABLE      = "neuromining.feature_table"
 HDFS_MODELS_DIR = "hdfs:///neuromining/models/"
 HDFS_METRICS    = "hdfs:///neuromining/metrics/classification_metrics.json"
@@ -53,8 +40,6 @@ TRAIN_RATIO = 0.8
 SEED        = 42
 
 
-# ── Spark session ─────────────────────────────────────────────────────────────
-
 def build_spark() -> SparkSession:
     return (
         SparkSession.builder
@@ -68,20 +53,12 @@ def build_spark() -> SparkSession:
     )
 
 
-# ── Data loading ──────────────────────────────────────────────────────────────
-
 def load_features(spark: SparkSession):
-    """
-    Load feature_table from Hive. The Spark–Hive connector is configured via
-    hive-site.xml mounted in the Spark container (thrift metastore URI).
-    Partition pruning is leveraged automatically when dt is specified.
-    """
     df = spark.table(HIVE_TABLE)
 
-    # Cast label to double (required by all MLlib classifiers)
+    # Cast label to double
     df = df.withColumn(LABEL_COL, col(LABEL_COL).cast("double"))
 
-    # Drop rows with any null feature
     df = df.dropna(subset=FEATURE_COLS + [LABEL_COL])
 
     print(f"[pipeline] Loaded {df.count():,} rows from {HIVE_TABLE}")
@@ -89,13 +66,7 @@ def load_features(spark: SparkSession):
     return df
 
 
-# ── Pipeline builders ─────────────────────────────────────────────────────────
-
 def _base_stages(scaler_type: str = "standard"):
-    """
-    Returns shared pre-processing stages:
-      VectorAssembler → Scaler
-    """
     assembler = VectorAssembler(
         inputCols=FEATURE_COLS,
         outputCol="raw_features",
@@ -112,9 +83,6 @@ def _base_stages(scaler_type: str = "standard"):
 
 
 def build_naive_bayes_pipeline() -> Pipeline:
-    """
-    Naïve Bayes requires non-negative features → use MinMaxScaler.
-    """
     stages = _base_stages(scaler_type="minmax")
     nb = NaiveBayes(
         featuresCol="features",
@@ -126,9 +94,6 @@ def build_naive_bayes_pipeline() -> Pipeline:
 
 
 def build_svm_pipeline() -> Pipeline:
-    """
-    Linear SVM (LinearSVC) works well in high-dimensional feature spaces.
-    """
     stages = _base_stages(scaler_type="standard")
     svm = LinearSVC(
         featuresCol="features",
@@ -140,10 +105,6 @@ def build_svm_pipeline() -> Pipeline:
 
 
 def build_mlp_pipeline(input_dim: int) -> Pipeline:
-    """
-    Multi-layer Perceptron (MLP) with 2 hidden layers.
-    Layer sizes: [input_dim, 64, 32, 2]
-    """
     stages = _base_stages(scaler_type="standard")
     mlp = MultilayerPerceptronClassifier(
         featuresCol="features",
@@ -156,8 +117,6 @@ def build_mlp_pipeline(input_dim: int) -> Pipeline:
     )
     return Pipeline(stages=stages + [mlp])
 
-
-# ── Evaluation ────────────────────────────────────────────────────────────────
 
 def evaluate(predictions, model_name: str) -> dict:
     evaluator_base = MulticlassClassificationEvaluator(
@@ -173,13 +132,7 @@ def evaluate(predictions, model_name: str) -> dict:
     return metrics
 
 
-# ── Ensemble voting ───────────────────────────────────────────────────────────
-
 def majority_vote(df, pred_cols: list[str]):
-    """
-    Hard majority vote across N binary classifiers.
-    Outputs 'ensemble_prediction' column (0 or 1).
-    """
     vote_sum = sum(col(c) for c in pred_cols)
     threshold = len(pred_cols) / 2.0
     return df.withColumn(
@@ -188,7 +141,6 @@ def majority_vote(df, pred_cols: list[str]):
     )
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
     spark = build_spark()
@@ -201,7 +153,6 @@ def main():
     input_dim = len(FEATURE_COLS)
     all_metrics = []
 
-    # ── Naïve Bayes ──────────────────────────────────────────────────────────
     print("[pipeline] Training Naïve Bayes …")
     nb_pipeline = build_naive_bayes_pipeline()
     nb_model = nb_pipeline.fit(train_df)
@@ -209,7 +160,7 @@ def main():
     all_metrics.append(evaluate(nb_preds.withColumnRenamed("nb_pred", "prediction"), "NaiveBayes"))
     nb_model.write().overwrite().save(HDFS_MODELS_DIR + "naive_bayes")
 
-    # ── Linear SVM ───────────────────────────────────────────────────────────
+
     print("[pipeline] Training Linear SVM …")
     svm_pipeline = build_svm_pipeline()
     svm_model = svm_pipeline.fit(train_df)
@@ -217,7 +168,7 @@ def main():
     all_metrics.append(evaluate(svm_preds.withColumnRenamed("svm_pred", "prediction"), "LinearSVM"))
     svm_model.write().overwrite().save(HDFS_MODELS_DIR + "linear_svm")
 
-    # ── MLP Neural Network ───────────────────────────────────────────────────
+
     print("[pipeline] Training MLP Neural Network …")
     mlp_pipeline = build_mlp_pipeline(input_dim)
     mlp_model = mlp_pipeline.fit(train_df)
@@ -225,7 +176,7 @@ def main():
     all_metrics.append(evaluate(mlp_preds.withColumnRenamed("mlp_pred", "prediction"), "MLP-NN"))
     mlp_model.write().overwrite().save(HDFS_MODELS_DIR + "mlp_nn")
 
-    # ── Ensemble Voting ───────────────────────────────────────────────────────
+
     print("[pipeline] Evaluating ensemble majority vote …")
     combined = (
         test_df
@@ -237,7 +188,7 @@ def main():
     ensemble_eval = combined.withColumnRenamed("ensemble_prediction", "prediction")
     all_metrics.append(evaluate(ensemble_eval, "Ensemble-Vote"))
 
-    # ── Persist metrics to HDFS ───────────────────────────────────────────────
+
     metrics_json = json.dumps(all_metrics, indent=2)
     spark.sparkContext.parallelize([metrics_json]).saveAsTextFile(HDFS_METRICS)
     print(f"[pipeline] Metrics saved → {HDFS_METRICS}")

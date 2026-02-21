@@ -1,15 +1,13 @@
-version: "3.8"
-
 services:
 
-  # ── HDFS Namenode ──────────────────────────────────────────────────────────
+
   hadoop-namenode:
     image: bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8
     container_name: neuromining-namenode
     restart: unless-stopped
     ports:
-      - "9870:9870"   # HDFS Web UI
-      - "8020:8020"   # HDFS RPC
+      - "9870:9870"
+      - "8020:8020"
     environment:
       - CLUSTER_NAME=neuromining
       - CORE_CONF_fs_defaultFS=hdfs://hadoop-namenode:8020
@@ -25,13 +23,13 @@ services:
       interval: 30s
       retries: 5
 
-  # ── HDFS Datanode ──────────────────────────────────────────────────────────
+
   hadoop-datanode:
     image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
     container_name: neuromining-datanode
     restart: unless-stopped
     ports:
-      - "9864:9864"   # Datanode Web UI
+      - "9864:9864"
     environment:
       - CORE_CONF_fs_defaultFS=hdfs://hadoop-namenode:8020
       - HDFS_CONF_dfs_replication=1
@@ -44,7 +42,7 @@ services:
     networks:
       - neuromining-net
 
-  # ── PostgreSQL (Hive Metastore backend) ────────────────────────────────────
+
   postgres:
     image: postgres:14-alpine
     container_name: neuromining-postgres
@@ -53,6 +51,8 @@ services:
       POSTGRES_DB: hive_metastore
       POSTGRES_USER: hive
       POSTGRES_PASSWORD: hive_secret
+      POSTGRES_HOST_AUTH_METHOD: md5
+      POSTGRES_INITDB_ARGS: "--auth-host=md5 --auth-local=md5"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
@@ -62,14 +62,16 @@ services:
       interval: 10s
       retries: 5
 
-  # ── Hive Metastore ─────────────────────────────────────────────────────────
+
   hive-metastore:
     image: bde2020/hive:2.3.2-postgresql-metastore
     container_name: neuromining-hive-metastore
     restart: unless-stopped
+    command: ["hive", "--service", "metastore"]
     environment:
       SERVICE_NAME: metastore
       DB_DRIVER: postgres
+      CORE_CONF_fs_defaultFS: "hdfs://hadoop-namenode:8020"
       HIVE_SITE_CONF_javax_jdo_option_ConnectionURL: "jdbc:postgresql://postgres:5432/hive_metastore"
       HIVE_SITE_CONF_javax_jdo_option_ConnectionDriverName: "org.postgresql.Driver"
       HIVE_SITE_CONF_javax_jdo_option_ConnectionUserName: "hive"
@@ -83,45 +85,45 @@ services:
     networks:
       - neuromining-net
 
-  # ── Hive Server2 ───────────────────────────────────────────────────────────
+
   hive-server:
     image: bde2020/hive:2.3.2-postgresql-metastore
     container_name: neuromining-hive-server
     restart: unless-stopped
+    command: ["hiveserver2", "--hiveconf", "hive.server2.enable.doAs=false"]
     ports:
-      - "10000:10000"  # HiveServer2 JDBC
-      - "10002:10002"  # HiveServer2 Web UI
+      - "10000:10000"
+      - "10002:10002"
     environment:
       SERVICE_NAME: hiveserver2
+      CORE_CONF_fs_defaultFS: "hdfs://hadoop-namenode:8020"
       HIVE_SITE_CONF_javax_jdo_option_ConnectionURL: "jdbc:postgresql://postgres:5432/hive_metastore"
       HIVE_SITE_CONF_javax_jdo_option_ConnectionDriverName: "org.postgresql.Driver"
       HIVE_SITE_CONF_javax_jdo_option_ConnectionUserName: "hive"
       HIVE_SITE_CONF_javax_jdo_option_ConnectionPassword: "hive_secret"
       HIVE_SITE_CONF_hive_metastore_uris: "thrift://hive-metastore:9083"
-      HIVE_SITE_CONF_hive_execution_engine: "spark"
+      HIVE_SITE_CONF_hive_execution_engine: "mr"
     depends_on:
       - hive-metastore
     networks:
       - neuromining-net
 
-  # ── Spark Master ───────────────────────────────────────────────────────────
+
   spark-master:
-    image: bitnami/spark:3.4.1
+    image: apache/spark:3.5.3
     container_name: neuromining-spark-master
     restart: unless-stopped
+    user: root
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
     ports:
-      - "8080:8080"    # Spark Web UI
-      - "7077:7077"    # Spark Master RPC
-      - "4040:4040"    # Spark App UI
+      - "8080:8080"
+      - "7077:7077"
+      - "4040:4040"
     environment:
-      - SPARK_MODE=master
-      - SPARK_RPC_AUTHENTICATION_ENABLED=no
-      - SPARK_RPC_ENCRYPTION_ENABLED=no
-      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
-      - SPARK_SSL_ENABLED=no
-      - SPARK_CONF_spark_hadoop_fs_defaultFS=hdfs://hadoop-namenode:8020
-      - SPARK_CONF_spark_sql_warehouse_dir=hdfs://hadoop-namenode:8020/user/hive/warehouse
-      - SPARK_CONF_spark_sql_hive_metastore_uris=thrift://hive-metastore:9083
+      - SPARK_MASTER_HOST=spark-master
+      - SPARK_MASTER_PORT=7077
+      - SPARK_MASTER_WEBUI_PORT=8080
+      - SPARK_CONF_DIR=/opt/spark/conf
     volumes:
       - ./volumes/shared:/data/shared
       - ../spark:/opt/spark-jobs
@@ -130,21 +132,19 @@ services:
     networks:
       - neuromining-net
 
-  # ── Spark Worker ───────────────────────────────────────────────────────────
+
   spark-worker:
-    image: bitnami/spark:3.4.1
+    image: apache/spark:3.5.3
     container_name: neuromining-spark-worker
     restart: unless-stopped
+    user: root
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
     environment:
-      - SPARK_MODE=worker
-      - SPARK_MASTER_URL=spark://spark-master:7077
-      - SPARK_WORKER_MEMORY=4G
+      - SPARK_WORKER_MEMORY=4g
       - SPARK_WORKER_CORES=2
-      - SPARK_RPC_AUTHENTICATION_ENABLED=no
-      - SPARK_RPC_ENCRYPTION_ENABLED=no
-      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
-      - SPARK_SSL_ENABLED=no
-      - SPARK_CONF_spark_hadoop_fs_defaultFS=hdfs://hadoop-namenode:8020
+      - SPARK_WORKER_WEBUI_PORT=8081
+    ports:
+      - "8081:8081"
     volumes:
       - ./volumes/shared:/data/shared
     depends_on:
